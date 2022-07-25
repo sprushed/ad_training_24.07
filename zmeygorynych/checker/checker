@@ -1,0 +1,195 @@
+#!/usr/local/bin/python3
+import sys
+import random
+argv = [c for c in sys.argv]
+import requests
+import hashlib
+from checklib import *
+from pwn import *
+import os
+import base64
+import logging
+from pathlib import Path
+from datetime import datetime
+
+# BASE_DIR = Path(__file__).absolute().resolve().parent
+PORT = 42069
+
+context.log_level='critical'
+
+def check(host):
+    try:
+        p = remote(host, PORT)
+    except pwnlib.exception.PwnlibException:
+        cquit(Status.DOWN)
+    entry = [b'1. Login', b'2. Register', b'3. Give Up...']
+    data = p.recvuntil(b'> ')
+    for i in entry:
+        if i not in data:
+            cquit(Status.DOWN, public="Can't get main menu")
+    return cquit(Status.OK)
+
+def put(host, _flag_id, flag, vuln):
+    try:
+        p = remote(host, PORT)
+    except pwnlib.exception.PwnlibException:
+        cquit(Status.DOWN)
+    login = rnd_string(16).encode()
+    password = rnd_string(16).encode()
+    shops = []
+    for i in range(3):
+        shops.append([rnd_string(10).encode(), rnd_string(25).encode()])
+    # p.interactive()
+    p.recvuntil(b'> ')
+    p.sendline(b'2')
+    p.recvuntil(b'Your brand new username:')
+    p.sendline(login)
+    p.recvuntil(b'Password:')
+    p.sendline(password)
+    p.recvuntil(b'One more time to be sure:')
+    p.sendline(password)
+    assert_in(b'Welcome to ZmeyGorynych, '+login, p.recvuntil(b'Choose your way >'), b'Could not register user')
+
+    if vuln == "1":
+        for i in range(len(shops)):
+            p.sendline(b'1')
+            p.recvuntil(b'Input new shop name >')
+            p.sendline(shops[i][0])
+            p.recvuntil(b'Choose description for your freshly made shop >')
+            p.sendline(shops[i][1])
+            p.recvuntil(b'Choose your way >')
+
+        p.sendline(b'2')
+        result = p.recvuntil(b'Your choice >')
+        for i in range(len(shops)):
+            assert_in(shops[i][0], result, b"Can't create a shop")
+            assert_in(shops[i][1], result, b"Can't create a shop")
+
+        my_shop = shops[random.randint(0, len(shops)-1)]
+
+        p.sendline(b'enter')
+        my_id = shops.index(my_shop)
+        p.sendline(str(my_id+1).encode())
+        assert_in(b'Welcome to the shop '+my_shop[0], p.recvuntil(b'Your choice >'), b'Could not log into the shop')
+
+        name = rnd_string(10).encode()
+        desc = rnd_string(10).encode()
+
+        p.sendline(b'add')
+        p.recvuntil(b'Enter item name:')
+        p.sendline(name)
+        p.recvuntil(b'Enter description:')
+        p.sendline(desc)
+        p.recvuntil(b'Enter directions for buyer:')
+        p.sendline(flag.encode())
+        p.recvuntil(b'Enter cost of this item:')
+        p.sendline(b'1005000')
+        data = p.recvuntil(b'Your choice >')
+        assert_in(name, data, b'Could not create item')
+        assert_in(desc, data, b'Could not create item')
+        assert_in(b'1005000', data, b'Could not create item')
+
+        data = (login+password+my_shop[0]+my_shop[1]+name+str(my_id+1).encode()).decode()
+        print(data)
+        p.close()
+        cquit(Status.OK, public='', private=data)
+    else:
+        p.sendline(b'4')
+        data = b'''Besides selling products, we can securely store some of your private data.\r\nThis is so secure, that you can't even look what you wrote yourself\r\nHowever, it you want your secrets back, send mail to noreply@localhost with your login credentials.\r\nWe will send it to you as soon as possible\r\nAverage response time: 19 work days\r\n\r\nEnter filename for your secret:'''
+        assert_in(data, p.recvuntil(b'Enter filename for your secret:'), b"I don't trust this service")
+        useless = rnd_string(10).encode()
+        p.sendline(useless)
+        data = b'You entered '+useless+b' but it is not secure, thus we will store it in random filename\r\nNow work fast and send us your secrets!!!'
+        assert_in(data, p.recvuntil(b'!!!'), b"I don't trust this service")
+        p.sendline(flag.encode())
+        cquit(Status.OK, public='', private='')
+
+def get(host, flag_id, flag, vuln):
+    try:
+        p = remote(host, PORT)
+    except pwnlib.exception.PwnlibException:
+        cquit(Status.DOWN)
+    if vuln == "2":
+        cquit(Status.OK)
+    login = flag_id[:16].encode()
+    password = flag_id[16:32].encode()
+    shop = flag_id[32:42].encode()
+    shop_desc = flag_id[42:67].encode()
+    name = flag_id[67:77].encode()
+    id = flag_id[77:].encode()
+
+    p.sendline(b'1')
+    p.recvuntil(b'Your Username:')
+    p.sendline(login)
+    p.recvuntil(b'Password')
+    p.sendline(password)
+    assert_in(b'Welcome to ZmeyGorynych, '+login, p.recvuntil(b'Choose your way >'), b'Could not login to newly registered user')
+
+    p.sendline(b'3')
+    indexes = p.recvuntil(b'Your choice >').split(b'\n')[-14]
+    indexes = indexes[3:-4].strip()
+    start = int(indexes.split(b'/')[0])
+    end = int(indexes.split(b'/')[1])
+
+    my_id = 0
+    for i in range(end, max(end-20, -1), -1):
+        p.sendline(b'go')
+        p.recvuntil(b'Choose desired page:')
+        p.sendline(str(i).encode())
+        data = p.recvuntil(b'Your choice >')
+        if b'Name: '+shop in data:
+            my_id = data.split(b'Name: '+shop)[0].split(b'.')[-2].split(b' ')[-1]
+            break
+    if not my_id:
+        cquit(Status.CORRUPT, "Can't find shop")
+    p.sendline(b'enter')
+    p.recvuntil(b'Select shop to browse >')
+    p.sendline(my_id)
+    data = p.recvuntil(b'Your choice >')
+    assert_in(shop, data, b"Can't log into shop")
+    p.sendline(b'buy')
+
+    p.recvuntil(b'Select item')
+    p.sendline(b'1')
+    data = p.recvuntil(b'Your choice >')
+    assert_in(flag.encode(), data, b"Can't buy own flag")
+    p.sendline(b'exit')
+    p.recvuntil(b'Your choice >')
+    p.sendline(b'exit')
+
+    p.recvuntil(b'Choose your way')
+    p.sendline(b'2')
+    p.recvuntil(b'Your choice >')
+    p.sendline(b'enter')
+    p.recvuntil(b'Select shop to browse >')
+    p.sendline(id)
+    data = p.recvuntil(b'Your choice >')
+
+    assert_in(shop, data, b"Shop name is corrupted")
+    assert_in(name, data, b"Name is corrupted")
+    assert_in(flag.encode(), data, b"Flag is corrupted")
+
+    cquit(Status.OK)
+
+if __name__ == '__main__':
+    action, *args = argv[1:]
+    try:
+        if action == "check":
+            host, = args
+            check(host)
+        elif action == "put":
+            host, flag_id, flag, vuln = args
+            put(host, flag_id, flag, vuln)
+        elif action == "get":
+            host, flag_id, flag, vuln = args
+            get(host, flag_id, flag, vuln)
+        else:
+            cquit(Status.ERROR, 'System error', 'Unknown action: ' + action)
+
+        cquit(Status.ERROR)
+    except pwnlib.exception.PwnlibException:
+        cquit(Status.DOWN, 'Connection error')
+    except SystemError:
+        raise
+    except Exception as e:
+        cquit(Status.ERROR, 'System error', str(e))

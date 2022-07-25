@@ -1,0 +1,25 @@
+version: "3.3"
+
+services:
+  postgres:
+    image: postgres:latest
+    environment:
+      POSTGRES_DB: "zmeydb"
+      POSTGRES_USER: "admin"
+      POSTGRES_PASSWORD: "ju57451mpl3p455w0rd"
+    volumes:
+      - ./initscript.sql:/docker-entrypoint-initdb.d/initscript.sql
+
+  zmeygorynych:
+    build: .
+    links:
+      - postgres
+    ports:
+      - 0.0.0.0:42069:42069
+    entrypoint: /app/run.sh
+    volumes:
+      - ./app:/app
+      - ./src:/src
+
+
+
