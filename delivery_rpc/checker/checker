@@ -1,0 +1,182 @@
+#!/usr/local/bin/python3
+
+import sys
+import httpx
+import asyncio
+from rpcpy.client import Client
+from random import SystemRandom
+import sqlite3
+from pathlib import Path
+import traceback
+
+exp_list = ['+', '-', '*']
+
+def get_host(host):
+    return "http://" + host + ":65432/"
+
+
+def check(host):
+    app = Client(httpx.AsyncClient(), base_url=get_host(host))
+
+    @app.remote_call
+    async def online_calculator(expression: str) -> str:
+        ...
+
+    @app.remote_call
+    async def register_delivery(cost: int, address: str, order_list: str) -> int:
+        ...
+
+    @app.remote_call
+    async def get_delivery(id: int) -> str:
+        ...
+
+    @app.remote_call
+    async def delivery_exist(id: str) -> list:
+        ...
+
+    # calc check
+    cryptogen = SystemRandom()
+    exp = str(cryptogen.randrange(1000)) + exp_list[cryptogen.randrange(3)] + str(cryptogen.randrange(1000)) + exp_list[cryptogen.randrange(3)] + str(cryptogen.randrange(1000))
+    loop = asyncio.get_event_loop()
+    coroutine = online_calculator(exp)
+    output = loop.run_until_complete(coroutine)
+    if output != eval(exp):
+        print("Calculator not working")
+        return 103
+
+    # reg check
+    d1 = cryptogen.randrange(1000)
+    d2 = str(cryptogen.randrange(1000))
+    d3 = str(cryptogen.randrange(1000))
+    loop = asyncio.get_event_loop()
+    coroutine = register_delivery(d1, d2, d3)
+    delivery_id = loop.run_until_complete(coroutine)
+
+    # exist
+    loop = asyncio.get_event_loop()
+    coroutine = delivery_exist(str(delivery_id))
+    list_data = loop.run_until_complete(coroutine)
+    if len(list_data) != 1:
+        print("Failed to check if delivery exist")
+        return 103
+
+    loop = asyncio.get_event_loop()
+    coroutine = get_delivery(delivery_id)
+    output = loop.run_until_complete(coroutine)
+    if str(d1) in output and d2 in output and d3 in output:
+        print('OK')
+        return 101
+    else:
+        print("Failed to create and get test delivery")
+        return 103
+
+
+def put(host, _flag_id, flag, vuln, conn):
+    code = check(host)
+    if code != 101:
+        return code
+    try:
+        app = Client(httpx.AsyncClient(), base_url=get_host(host))
+
+        @app.remote_call
+        async def register_delivery(cost: int, address: str, order_list: str) -> int:
+            ...
+
+        @app.remote_call
+        async def get_delivery(id: int) -> str:
+            ...
+
+        cryptogen = SystemRandom()
+        d1 = cryptogen.randrange(1000)
+        d2 = str(cryptogen.randrange(1000))
+        loop = asyncio.get_event_loop()
+        coroutine = register_delivery(d1, d2, flag)
+        delivery_id = loop.run_until_complete(coroutine)
+    except:
+        #print(traceback.format_exc())
+        print("Failed to store delivery")
+        return 103
+
+    try:
+        cursor = conn.cursor()
+        cursor.execute('DELETE from delivery where flag_id = ?', (flag_id,))
+        cursor.execute('insert into delivery (id, flag_id, flag, delivery_id) values (?, ?, ?, ?)',(sys.argv[2], flag_id, flag, delivery_id))
+        conn.commit()
+        print(delivery_id)
+        return 101
+    except:
+        #print(traceback.format_exc())
+        print("Checker error")
+        return 110
+
+
+def get(host, flag_id, flag, vuln, conn):
+    code = check(host)
+    if code != 101:
+        return code
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            'select delivery_id, flag from delivery where flag_id = ?', (flag_id,))
+        data = cursor.fetchone()
+        if not data:
+            print("Can't get flag")
+            return 102
+        delivery_id, s_flag = data
+        print(delivery_id)
+    except:
+        #print(traceback.format_exc())
+        print("Checker error")
+        return 110
+
+    try:
+        app = Client(httpx.AsyncClient(), base_url=get_host(host))
+
+        @app.remote_call
+        async def get_delivery(id: int) -> str:
+            ...
+
+        loop = asyncio.get_event_loop()
+        coroutine = get_delivery(delivery_id)
+        output = loop.run_until_complete(coroutine)
+        if flag in output:
+            print('OK')
+            return 101
+        else:
+            print("Stored flag not found")
+            return 102
+    except ConnectionError:
+        print("Failed to connect to service")
+        return 104
+    except:
+        #print(traceback.format_exc())
+        print("Failed to get delivery")
+        return 103
+
+
+if __name__ == "__main__":
+    action, args = sys.argv[1], sys.argv[2:]
+    BASE_DIR = Path(__file__).absolute().resolve().parent
+    local_path = BASE_DIR / 'delivery.db'
+    conn = sqlite3.connect(local_path)
+    cursor = conn.cursor()
+    cursor.execute('create table if not exists delivery (id integer, flag_id TEXT, flag TEXT, delivery_id integer)')
+    conn.commit()
+    try:
+        if action == "check":
+            code = check(args[0])
+            exit(code)
+        elif action == "put":
+            host, flag_id, flag, vuln = args
+            code = put(host, flag_id, flag, vuln, conn)
+            exit(code)
+        elif action == "get":
+            host, flag_id, flag, vuln = args
+            code = get(host, flag_id, flag, vuln, conn)
+            exit(code)
+        else:
+            print("Unknown action " + action)
+            exit(110)
+    except Exception as e:
+        print("System error", str(e))
+        exit(110)

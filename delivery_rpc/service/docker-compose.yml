@@ -1,0 +1,19 @@
+version: "3.3"
+
+services:
+  deliveryrpc:
+    build: .
+    ports:
+      - "65432:65432"
+    volumes:
+      - ./data/:/app/data
+
+  cleaner:
+      image: c4tbuts4d/dedcleaner:latest
+      restart: on-failure
+      volumes:
+        - ./data/:/data
+      environment:
+        - DELETE_AFTER=30m
+        - SLEEP=30m
+        - DIRS=/data
