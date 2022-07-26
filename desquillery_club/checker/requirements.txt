@@ -1,0 +1,5 @@
+checklib
+requests
+pycryptodome
+pwntools
+gmpy2

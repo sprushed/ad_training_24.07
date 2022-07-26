@@ -1,0 +1,8 @@
+fastapi
+pwntools
+uvicorn
+typing
+gmpy2
+pycryptodome
+datetime
+PyJWT

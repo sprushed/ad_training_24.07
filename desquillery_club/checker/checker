@@ -1,0 +1,379 @@
+#!/usr/bin/python3
+
+import sys
+from base64 import b64decode, b64encode
+from datetime import datetime
+from random import choice, randint
+from typing import Dict, Optional
+
+import requests
+from checklib import (Status, check_response, cquit, rnd_bytes, rnd_password,
+                      rnd_string, rnd_username)
+from Crypto.Util.number import long_to_bytes
+
+from crypto.dh import DHext
+from crypto.squresystem import Squre
+
+PORT = 8000
+
+
+def register(username: str, password: str, type: str):
+    r = requests.post(
+        f"http://{host}:{PORT}/register",
+        json={"login": username, "password": password, "type": type},
+    )
+
+    if r.status_code == 422:
+        cquit(Status.ERROR, public="how do you dont know that you know")
+    if r.status_code not in [201, 406, 409]:
+        cquit(Status.ERROR, public="Unknown Status Code")
+        return None
+
+    if type in ["support", "user"]:
+        if r.status_code == 406:
+            if type == "support" and "support_" == username[:8]:
+                cquit(Status.ERROR, public="Could not register support")
+                return None
+
+    if r.status_code == 409:
+        cquit(Status.OK)
+
+    if r.status_code == 201:
+        return r.json()["params"]
+
+
+def login(username: str, password: str):
+    r = requests.post(
+        f"http://{host}:{PORT}/login", json={"login": username, "password": password}
+    )
+    if r.status_code == 422:
+        cquit(Status.ERROR, public="how do you dont know that you know")
+
+    if r.status_code not in [200, 401, 406, 409]:
+        cquit(Status.ERROR, public="Unknown Status Code")
+        return None
+
+    if r.status_code == 409:
+        cquit(Status.ERROR, public="Could not login")
+        return None
+
+    elif r.status_code == 401:
+        cquit(Status.ERROR, public="Could not login")
+        return None
+
+    if r.status_code == 200:
+        return r.json()["token"]
+
+    cquit(Status.OK)
+
+
+def sendb(token: Optional[str], params: Dict[str, int]):
+    r = requests.post(
+        f"http://{host}:{PORT}/sendb",
+        json={"p": params["p"], "g": params["g"], "B": params["B"]},
+        headers={"x-auth-token": token},
+    )
+
+    if r.status_code == 422:
+        cquit(Status.ERROR, public="how do you dont know that you know")
+
+    if r.status_code not in [201, 401, 400, 409]:
+        cquit(Status.ERROR, public="Unknown Status Code")
+        return None
+
+    if r.status_code == 401:
+        cquit(Status.ERROR, public="Could not authorize")
+        return None
+    elif r.status_code == 400:
+        cquit(Status.ERROR, public="Parameters check failed")
+        return None
+    elif r.status_code == 409:
+        cquit(Status.ERROR, public="Shared key check failed")
+        return None
+
+
+def sendkey(token: Optional[str], SK: int):
+    r = requests.post(
+        f"http://{host}:{PORT}/sendkey",
+        json={"SK": SK},
+        headers={"x-auth-token": token},
+    )
+    if r.status_code == 422:
+        cquit(Status.ERROR, public="how do you dont know that you know")
+
+    if r.status_code not in [201, 401, 400, 409]:
+        cquit(Status.ERROR, public="Unknown Status Code")
+        return None
+
+    if r.status_code == 401:
+        cquit(Status.ERROR, public="Could not authorize")
+        return None
+    elif r.status_code == 409:
+        cquit(Status.ERROR, public="Symmetric key check failed")
+        return None
+
+
+def users(token: Optional[str]):
+    r = requests.get(f"http://{host}:{PORT}/users", headers={"x-auth-token": token})
+    if r.status_code not in [200, 401, 403]:
+        cquit(Status.ERROR, public="Unknown Status Code")
+        return None
+    if r.status_code == 422:
+        cquit(Status.ERROR, public="how do you dont know that you know")
+
+    if r.status_code == 401:
+        cquit(Status.ERROR, public="Could not authorize")
+        return None
+    elif r.status_code == 403:
+        cquit(Status.ERROR, public="Could not access all users with support")
+        return None
+
+    if r.status_code == 200:
+        return r.json()["users"]
+    cquit(Status.OK)
+
+
+def send_message(token: Optional[str], username: str, text: str, timestamp: str):
+    r = requests.post(
+        f"http://{host}:{PORT}/message/{username}",
+        json={"text": text, "timestamp": timestamp},
+        headers={"x-auth-token": token},
+    )
+    if r.status_code == 422:
+        cquit(Status.ERROR, public="how do you dont know that you know")
+
+    if r.status_code not in [201, 401, 400, 409]:
+        cquit(Status.ERROR, public="Unknown Status Code")
+        return None
+
+    if r.status_code == 401:
+        cquit(Status.ERROR, public="Could not authorize")
+        return None
+    elif r.status_code == 400:
+        cquit(Status.ERROR, public="Could not create valid conversation")
+        return None
+    elif r.status_code == 409:
+        cquit(Status.ERROR, public="Symmetric key assertion failed")
+        return None
+
+
+def get_messages_to(token: Optional[str], username: str):
+    r = requests.get(
+        f"http://{host}:{PORT}/messagesto/{username}", headers={"x-auth-token": token}
+    )
+    if r.status_code == 422:
+        cquit(Status.ERROR, public="how do you dont know that you know")
+
+    if r.status_code not in [200, 204, 401, 403]:
+        cquit(Status.ERROR, public="Unknown Status Code")
+        return None
+
+    if r.status_code == 401:
+        cquit(Status.ERROR, public="Could not authorize")
+        return None
+    elif r.status_code == 403:
+        cquit(Status.ERROR, public="Could not get messages")
+        return None
+
+    if r.status_code == 200:
+        return r.json()["messages"]
+    cquit(Status.OK)
+
+
+def get_messages_from(token: Optional[str], username: str):
+    r = requests.get(
+        f"http://{host}:{PORT}/messagesfrom/{username}", headers={"x-auth-token": token}
+    )
+    if r.status_code == 422:
+        cquit(Status.ERROR, public="how do you dont know that you know")
+
+    if r.status_code not in [200, 204, 401, 403]:
+        cquit(Status.ERROR, public="Unknown Status Code")
+        return None
+
+    if r.status_code == 401:
+        cquit(Status.ERROR, public="Could not authorize")
+        return None
+    elif r.status_code == 403:
+        cquit(Status.ERROR, public="Could not get messages")
+        return None
+
+    if r.status_code == 200:
+        return r.json()["messages"]
+    cquit(Status.OK)
+
+
+def check(host):
+    try:
+        r = requests.get(f"http://{host}:{PORT}/users")
+    except:
+        cquit(Status.DOWN, public="Failed to connect to service")
+
+    user_username, user_password = rnd_username(randint(100, 200)), rnd_password(30)
+
+    user_params = register(user_username, user_password, "user")
+    user_token = login(user_username, user_password)
+
+    user_dh = DHext(user_params["p"], user_params["g"])
+    user_B = user_params["A"]
+    user_A = user_dh.A
+
+    sendb(user_token, {"p": user_dh.P, "g": user_dh.G, "B": user_A})  # norm
+
+    user_Squre = Squre(kdig=100)
+
+    user_dh.calcShared(user_B)
+
+    sendkey(user_token, user_dh.encrypt(user_Squre.K))
+
+    timestamp = datetime.now().strftime("%d/%m/%y/%H:%M:%S")
+    user_recieved = []
+    support_username, support_password = "support_" + rnd_username(
+        randint(100, 200)
+    ), rnd_password(30)
+
+    support_params = register(support_username, support_password, "support")
+    support_token = login(support_username, support_password)
+
+    support_dh = DHext(support_params["p"], support_params["g"])
+    support_B = support_params["A"]
+    support_A = support_dh.A
+
+    sendb(support_token, {"p": support_dh.P, "g": support_dh.G, "B": support_A})  # norm
+    support_dh.calcShared(support_B)
+
+    support_Squre = Squre(kdig=100)
+    sendkey(support_token, support_dh.encrypt(support_Squre.K))
+    messages = users(support_token)  # get access
+    if [user_username, "user"] not in messages:
+        cquit(Status.ERROR, public="there's no existring user")
+
+    timestamp = datetime.now().strftime("%d/%m/%y/%H:%M:%S")
+    sup_mes = rnd_string(30).encode()
+    sup_enc = b64encode(support_Squre.encrypt(sup_mes))
+    send_message(support_token, user_username, sup_enc, timestamp)  # probablyt
+
+    mes = get_messages_to(user_token, user_username)
+    user_decrypted = []
+    user_state = "0"
+    for m in mes:
+        if m["checked"] == 1:
+            continue
+
+        if "{" not in m["text"]:
+            y = b64decode(m["text"].encode())
+            user_state = user_Squre.get_alpha()
+            y = user_Squre.decrypt(y)
+            user_decrypted.append(y)
+
+        user_recieved.append(m)
+
+    if sup_mes not in user_decrypted:
+        cquit(Status.ERROR, public="failure in recieving correct message")
+
+    timestamp = datetime.now().strftime("%d/%m/%y/%H:%M:%S")
+    usr_mes = rnd_string(30).encode()
+    usr_enc = b64encode(user_Squre.encrypt(usr_mes)).decode()
+    send_message(user_token, support_username, usr_enc, timestamp)  # probablyt
+
+    mes = get_messages_to(support_token, support_username)
+    support_recieved = []
+    support_decrypted = []
+    support_state = "0"
+    for m in mes:
+        if m["checked"] == 1:
+            continue
+
+        if "{" not in m["text"]:
+            y = b64decode(m["text"].encode())
+            support_state = support_Squre.get_alpha()
+            y = support_Squre.decrypt(y)
+            support_decrypted.append(y)
+
+        support_recieved.append(m)
+
+    if usr_mes not in support_decrypted:
+        cquit(Status.ERROR, public="failure in recieving correct message")
+
+    cquit(Status.OK)
+
+
+def put(host, _flag_id, flag, vuln):
+    touser, topassword = rnd_username(100), rnd_password(100)
+    fromuser, frompassword = "support_" + rnd_username(100), rnd_password(100)
+
+    toparams = register(touser, topassword, "user")
+    fromparams = register(fromuser, frompassword, "support")
+
+    totoken = login(touser, topassword)
+    fromtoken = login(fromuser, frompassword)
+
+    todh = DHext(toparams["p"], toparams["g"])
+    fromdh = DHext(fromparams["p"], fromparams["g"])
+
+    todh.calcShared(toparams["A"])
+    fromdh.calcShared(fromparams["A"])
+
+    tosym = Squre(kdig=100)
+    fromsym = Squre(kdig=100)
+
+    toenc = todh.encrypt(tosym.K)
+    fromenc = fromdh.encrypt(fromsym.K)
+
+    sendb(totoken, {"p": todh.P, "g": todh.G, "B": todh.A})
+    sendb(fromtoken, {"p": fromdh.P, "g": fromdh.G, "B": fromdh.A})
+
+    sendkey(totoken, toenc)
+    sendkey(fromtoken, fromenc)
+
+    mes0 = b"hello"
+    enc0 = b64encode(fromsym.encrypt(mes0)).decode()
+
+    send_message(fromtoken, touser, enc0, datetime.now().strftime("%d/%m/%y/%H:%M:%S"))
+    mes = get_messages_to(totoken, touser)
+    x = [x["text"] for x in mes if x["from_user"] == fromuser][0]
+    m = tosym.decrypt(b64decode(x.encode())).decode()
+    if m != "hello":
+        cquit(Status.ERROR, public="no way i can get the message correctly")
+
+    mes0 = flag.encode()
+    enc0 = b64encode(fromsym.encrypt(mes0)).decode()
+    send_message(fromtoken, touser, enc0, datetime.now().strftime("%d/%m/%y/%H:%M:%S"))
+
+    c0 = b64encode(tosym.encrypt(mes0)).decode()
+    print(f"{fromuser}:{frompassword}:{touser}:{c0}")
+    cquit(Status.OK, public=f"{fromuser}:{frompassword}:{touser}:{c0}")
+
+
+def get(host, flag_id, flag, vuln):
+    fromuser, frompassword, username, c0 = flag_id.split(":")
+    token = login(fromuser, frompassword)
+    m = get_messages_from(token, fromuser)
+    if c0 in [x["text"] for x in m if x["from_user"] == fromuser]:
+        cquit(Status.OK)
+    else:
+        cquit(Status.CORRUPT, public="Flag not found")
+
+
+if __name__ == "__main__":
+    action, args = sys.argv[1], sys.argv[2:]
+    host = args[0]
+    try:
+        if action == "check":
+            check(args[0])
+        elif action == "put":
+            host, flag_id, flag, vuln = args
+            put(host, flag_id, flag, vuln)
+        elif action == "get":
+            host, flag_id, flag, vuln = args
+            get(host, flag_id, flag, vuln)
+        else:
+            cquit(Status.ERROR, "Unknown action " + action)
+
+        cquit(Status.ERROR)
+    except (requests.exceptions.ConnectionError, requests.exceptions.ConnectTimeout):
+        cquit(Status.DOWN, "Connection error")
+    except SystemError:
+        raise
+    except Exception as e:
+        cquit(Status.ERROR, "System error", str(e))
